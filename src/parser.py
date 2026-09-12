@@ -6,7 +6,7 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError  # type:ignore
 
-from models import FunctionCallResult, FunctionDefinition, ProjectInput, PromptInput
+from .models import FunctionCallResult, FunctionDefinition, ProjectInput, PromptInput
 
 # its a Template based but for pydantic.
 T = TypeVar("T", bound=BaseModel)

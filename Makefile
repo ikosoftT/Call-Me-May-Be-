@@ -2,7 +2,7 @@ install:
 	uv sync
 
 run:
-	uv run python -m src
+	uv run python3 -m src
 
 debug:
 	uv run python -m pdb -m src
