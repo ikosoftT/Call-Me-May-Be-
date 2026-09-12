@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator  # type: ignore
 
-JsonType = Literal["string", "number", "boolean", "integer", "object", "array", "null"]
+JsonType = Literal["string", "number", "boolean",
+                   "integer", "object", "array", "null"]
 
 
 class TypeDefinition(BaseModel):
@@ -51,7 +52,8 @@ class FunctionDefinition(BaseModel):
             if not stripped:
                 raise ValueError("parameter name cannot be empty")
             if stripped in clean:
-                raise ValueError(f"duplicate parameter name after trimming: {stripped}")
+                raise ValueError(
+                    f"duplicate parameter name after trimming: {stripped}")
             clean[stripped] = definition
         return clean
 
@@ -86,5 +88,8 @@ class ProjectInput(BaseModel):
         names = [function.name for function in self.functions]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
-            raise ValueError(f"duplicate function names: {', '.join(duplicates)}")
+            raise ValueError(
+                f"duplicate function names: {', '.join(duplicates)}")
         return self
+
+
