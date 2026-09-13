@@ -1,93 +1,70 @@
-from typing import List
+from __future__ import annotations
+
+from typing import TypeVar
 
 from .models import FunctionDefinition
 
 
-def build_function_selection_prompt(
-    prompt: str,
-    functions: List[FunctionDefinition],
-) -> str:
-    """Build the semantic context used for function selection."""
-
-    lines = [
-        "You are a function-calling assistant.",
-        "Choose exactly one function from the available functions.",
-        "",
-        "Available functions:",
-    ]
-
-    for func in functions:
-        lines.append(f"- {func.name}: {func.description}")
-
-    lines.extend([
-        "",
-        f"User request: {prompt}",
-        "",
-        "Function:",
-    ])
-
-    return "\n".join(lines)
+T = TypeVar("T")
 
 
-def choose_function_name(
+def constrained_choice(
     model,
     prompt: str,
-    functions: List[FunctionDefinition],
+    choices: list[str],
 ) -> str:
-    """Choose one valid function name using prefix-constrained decoding."""
+    """
+    Choose exactly one string from a finite set using
+    multi-token prefix-constrained decoding.
+    """
 
-    if not functions:
-        raise ValueError("No functions available for decoding")
+    if not choices:
+        raise ValueError("No choices available")
 
-    selection_prompt = build_function_selection_prompt(
-        prompt,
-        functions,
-    )
+    prompt_ids = model.encode(prompt)[0].tolist()
 
-    prompt_ids = model.encode(selection_prompt)[0].tolist()
+    encoded_choices: list[tuple[str, list[int]]] = []
 
-    encoded_functions: dict[str, list[int]] = {}
-
-    for func in functions:
-        ids = model.encode(func.name)[0].tolist()
+    for choice in choices:
+        ids = model.encode(choice)[0].tolist()
 
         if not ids:
             raise ValueError(
-                f"Function name {func.name!r} encoded to zero tokens"
+                f"Choice {choice!r} encoded to zero tokens"
             )
 
-        encoded_functions[func.name] = ids
+        encoded_choices.append((choice, ids))
 
     generated: list[int] = []
 
     while True:
         candidates: list[tuple[str, list[int]]] = []
 
-        for name, ids in encoded_functions.items():
+        for choice, ids in encoded_choices:
             if ids[:len(generated)] == generated:
-                candidates.append((name, ids))
+                candidates.append((choice, ids))
 
         if not candidates:
             raise RuntimeError(
                 "Constrained decoding reached an invalid prefix"
             )
 
-        # If the currently generated token sequence exactly matches
-        # one valid function name, decoding is complete.
-        for name, ids in candidates:
+        # Complete choice.
+        for choice, ids in candidates:
             if ids == generated:
-                return name
+                return choice
 
         allowed_next_tokens: set[int] = set()
 
         for _, ids in candidates:
             if len(ids) > len(generated):
-                next_token = ids[len(generated)]
-                allowed_next_tokens.add(next_token)
+                allowed_next_tokens.add(
+                    ids[len(generated)]
+                )
 
         if not allowed_next_tokens:
             raise RuntimeError(
-                "No valid next token available during function decoding"
+                "No valid next token during constrained decoding"
             )
 
         logits = model.get_logits_from_input_ids(
@@ -100,8 +77,55 @@ def choose_function_name(
             constrained_logits[token_id] = logits[token_id]
 
         best_token_id = max(
-            range(len(constrained_logits)),
-            key=lambda i: constrained_logits[i],
+            allowed_next_tokens,
+            key=lambda token_id: constrained_logits[token_id],
         )
 
         generated.append(best_token_id)
+
+
+def build_function_selection_prompt(
+    prompt: str,
+    functions: list[FunctionDefinition],
+) -> str:
+    lines = [
+        "You are a function-calling assistant.",
+        "Select exactly one function for the user request.",
+        "Output only the function name.",
+        "",
+        "Available functions:",
+    ]
+
+    for function in functions:
+        lines.append(
+            f"- {function.name}: {function.description}"
+        )
+
+    lines.extend([
+        "",
+        f"User request: {prompt}",
+        "",
+        "Selected function:",
+    ])
+
+    return "\n".join(lines)
+
+
+def choose_function_name(
+    model,
+    prompt: str,
+    functions: list[FunctionDefinition],
+) -> str:
+    if not functions:
+        raise ValueError("No functions available")
+
+    selection_prompt = build_function_selection_prompt(
+        prompt,
+        functions,
+    )
+
+    return constrained_choice(
+        model,
+        selection_prompt,
+        [function.name for function in functions],
+    )
