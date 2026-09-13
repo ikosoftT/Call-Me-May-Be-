@@ -114,8 +114,18 @@ def write_results(path: str | Path, results: list[FunctionCallResult]) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         payload = [result.model_dump() for result in results]
         with output_path.open("w", encoding="utf-8") as file:
-            json.dump(payload, file, indent=2, ensure_ascii=False)
+            json.dump(
+                payload,
+                file,
+                indent=2,
+                ensure_ascii=False,
+                allow_nan=False,
+            )
             file.write("\n")
+    except ValueError as exc:
+        raise ParserError(
+            f"cannot write non-standard JSON value to {output_path}: {exc}"
+        ) from exc
     except OSError as exc:
         raise ParserError(
             f"cannot write output file {output_path}: {exc}") from exc

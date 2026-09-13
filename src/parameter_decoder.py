@@ -13,31 +13,124 @@ def unique(values: list[str]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
+def semantic_request_text(text: str) -> str:
+    """Keep the user request and drop obvious injected output instructions."""
+
+    injection_markers = [
+        "ignore previous instructions",
+        "set output to",
+    ]
+
+    lowered = text.lower()
+    cut_at = len(text)
+
+    for marker in injection_markers:
+        marker_index = lowered.find(marker)
+        if marker_index != -1:
+            cut_at = min(cut_at, marker_index)
+
+    return text[:cut_at]
+
+
 def extract_numbers(text: str) -> list[str]:
     """Find numeric values explicitly present in the user request."""
 
+    finite_number_text = semantic_request_text(text)
+
     return unique(
         re.findall(
-            r"(?<![\w.])-?\d+(?:\.\d+)?(?![\w.])",
-            text,
+            r"(?<![\w.])-?(?:\d+\.\d+|\d+|\.\d+)(?:[eE][+-]?\d+)?(?!\w|\.\d)",
+            finite_number_text,
         )
     )
 
 
+def decode_user_escapes(value: str) -> str:
+    """Decode common escaped text a user may write inside quotes."""
+
+    try:
+        decoded = value.encode("utf-8").decode("unicode_escape")
+        return decoded.encode("utf-16", "surrogatepass").decode("utf-16")
+    except UnicodeDecodeError:
+        return value
+
+
 def extract_quoted_strings(text: str) -> list[str]:
-    """Extract strings enclosed in single or double quotes."""
+    """Extract quoted strings while respecting escaped quote characters."""
 
-    double_quoted = re.findall(
-        r'"([^"]*)"',
-        text,
-    )
+    values: list[str] = []
+    index = 0
 
-    single_quoted = re.findall(
-        r"'([^']*)'",
-        text,
-    )
+    while index < len(text):
+        quote = text[index]
+        if quote not in {"'", '"'}:
+            index += 1
+            continue
 
-    return unique(double_quoted + single_quoted)
+        index += 1
+        chars: list[str] = []
+        escaped = False
+
+        while index < len(text):
+            char = text[index]
+
+            if escaped:
+                chars.append("\\" + char)
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                break
+            else:
+                chars.append(char)
+
+            index += 1
+
+        if index < len(text) and text[index] == quote:
+            values.append("".join(chars))
+
+        index += 1
+
+    return unique(values)
+
+
+def extract_phrase_value(text: str, phrases: list[str]) -> str | None:
+    """Return the quoted value after the last matching phrase."""
+
+    matches: list[tuple[int, str]] = []
+
+    for phrase in phrases:
+        pattern = re.compile(
+            rf"\b{re.escape(phrase)}\s+(['\"])",
+            flags=re.IGNORECASE,
+        )
+
+        for match in pattern.finditer(text):
+            quote = match.group(1)
+            index = match.end()
+            chars: list[str] = []
+            escaped = False
+
+            while index < len(text):
+                char = text[index]
+
+                if escaped:
+                    chars.append("\\" + char)
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    matches.append((match.start(), "".join(chars)))
+                    break
+                else:
+                    chars.append(char)
+
+                index += 1
+
+    if not matches:
+        return None
+
+    return max(matches, key=lambda item: item[0])[1]
 
 
 def extract_words(text: str) -> list[str]:
@@ -73,16 +166,19 @@ def build_string_candidates(
     # source_string
     # -------------------------
     if param_name == "source_string":
-        if quoted:
-            # Usually the source string is the longest quoted value.
-            # Example:
-            # 'cat', 'dog', 'The cat sat ...'
-            # -> source_string should be the long sentence.
-            longest = max(quoted, key=len)
-            candidates.append(longest)
+        source_value = extract_phrase_value(
+            user_prompt,
+            [
+                "source string",
+                "string",
+                "in",
+            ],
+        )
 
-            # Keep the other quoted strings as fallback possibilities.
-            candidates.extend(quoted)
+        if source_value is not None:
+            candidates.append(source_value)
+        elif quoted:
+            candidates.append(max(quoted, key=len))
 
         else:
             # Fallback if no quoted string exists.
@@ -92,35 +188,55 @@ def build_string_candidates(
     # regex
     # -------------------------
     elif param_name == "regex":
+        semantic_regex_found = False
+
+        explicit_regex = extract_phrase_value(
+            user_prompt,
+            [
+                "regex pattern",
+                "regex",
+                "pattern",
+            ],
+        )
+
+        if explicit_regex is not None:
+            candidates.append(explicit_regex)
+            semantic_regex_found = True
+
         if "number" in lower or "numbers" in lower:
             candidates.extend([
                 r"\d+",
                 r"[0-9]+",
             ])
+            semantic_regex_found = True
 
         if "vowel" in lower or "vowels" in lower:
             candidates.extend([
                 r"[aeiouAEIOU]",
                 r"[aeiou]",
             ])
+            semantic_regex_found = True
 
         # Example:
         # Substitute the word 'cat' with 'dog'
-        word_match = re.search(
-            r"(?:word|pattern)\s+['\"]([^'\"]+)['\"]",
+        word_value = extract_phrase_value(
             user_prompt,
-            flags=re.IGNORECASE,
+            [
+                "word",
+            ],
         )
 
-        if word_match:
+        if word_value is not None:
             candidates.append(
-                re.escape(word_match.group(1))
+                re.escape(word_value)
             )
+            semantic_regex_found = True
 
         # Fallback: short quoted strings may be regex targets.
-        for value in quoted:
-            if len(value.split()) <= 3:
-                candidates.append(value)
+        if not semantic_regex_found:
+            for value in quoted:
+                if len(value.split()) <= 3:
+                    candidates.append(value)
 
     # -------------------------
     # replacement
@@ -128,28 +244,53 @@ def build_string_candidates(
     elif param_name == "replacement":
         if "asterisk" in lower:
             candidates.append("*")
-
-        replacement_match = re.search(
-            r"\bwith\s+['\"]?([^'\"\s]+)['\"]?",
-            user_prompt,
-            flags=re.IGNORECASE,
-        )
-
-        if replacement_match:
-            candidates.append(
-                replacement_match.group(1)
+        else:
+            replacement_value = extract_phrase_value(
+                user_prompt,
+                [
+                    "with",
+                ],
             )
 
-        # Fallback:
-        # quoted values after the target may represent replacement.
-        if len(quoted) >= 2:
-            candidates.append(quoted[1])
+            if replacement_value is not None:
+                candidates.append(
+                    decode_user_escapes(replacement_value)
+                )
+            else:
+                replacement_match = re.search(
+                    r"\bwith\s+([^'\"\s]+)",
+                    user_prompt,
+                    flags=re.IGNORECASE,
+                )
+
+                if replacement_match:
+                    candidates.append(
+                        replacement_match.group(1)
+                    )
+
+            # Fallback:
+            # quoted values after the target may represent replacement.
+            if len(quoted) >= 2:
+                candidates.append(quoted[1])
 
     # -------------------------
     # generic string parameter
     # -------------------------
     else:
-        candidates.extend(quoted)
+        decoded_quoted = [
+            decode_user_escapes(value)
+            for value in quoted
+        ]
+        candidates.extend(decoded_quoted)
+
+        after_colon = re.search(
+            r":\s*(.+?)\.?$",
+            user_prompt,
+            flags=re.DOTALL,
+        )
+        if after_colon:
+            candidates.append(after_colon.group(1).rstrip("."))
+
         candidates.extend(extract_words(user_prompt))
 
     return unique(candidates)
@@ -208,24 +349,22 @@ def decode_number(
     prompt: str,
     user_prompt: str,
     already_extracted: dict[str, Any],
-) -> int | float:
+) -> float:
     """Constrain a number parameter to numbers present in the request."""
 
     candidates = extract_numbers(user_prompt)
 
     # Avoid repeatedly choosing the same numeric argument when
     # multiple distinct values exist.
-    used = {
-        str(value)
-        for value in already_extracted.values()
-        if isinstance(value, (int, float))
-        and not isinstance(value, bool)
-    }
+    used = set()
+    for value in already_extracted.values():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            used.add(float(value))
 
     remaining = [
         value
         for value in candidates
-        if value not in used
+        if float(value) not in used
     ]
 
     if remaining:
@@ -242,10 +381,7 @@ def decode_number(
         candidates,
     )
 
-    if "." in selected:
-        return float(selected)
-
-    return int(selected)
+    return float(selected)
 
 
 def decode_string(
