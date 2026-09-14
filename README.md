@@ -160,6 +160,7 @@ I also checked that the output remains valid JSON and that each result object ke
 
 ## Resources
 
+- Detailed code explanation: `CODE_EXPLANATION.md`
 - Python JSON documentation: https://docs.python.org/3/library/json.html
 - Python regular expressions documentation: https://docs.python.org/3/library/re.html
 - Pydantic documentation: https://docs.pydantic.dev/

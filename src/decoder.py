@@ -1,28 +1,47 @@
 from __future__ import annotations
 
-from typing import TypeVar
+from typing import Any, Protocol
 
 from .models import FunctionDefinition
 
 
-T = TypeVar("T")
+class ChoiceModel(Protocol):
+    """Minimal model interface needed by constrained decoding."""
+
+    def encode(self, text: str) -> Any:
+        """Return token ids for text."""
+        ...
+
+    def get_logits_from_input_ids(self, input_ids: list[int]) -> list[float]:
+        """Return next-token logits for the provided token ids."""
+        ...
 
 
 def constrained_choice(
-    model,
+    model: ChoiceModel,
     prompt: str,
     choices: list[str],
 ) -> str:
-    """
-    Choose exactly one string from a finite set using
-    multi-token prefix-constrained decoding.
+    """Choose one string using multi-token prefix-constrained decoding.
+
+    Args:
+        model: LLM wrapper exposing `encode` and `get_logits_from_input_ids`.
+        prompt: Context sent to the model before generation.
+        choices: Exact strings the decoder is allowed to return.
+
+    Returns:
+        The selected string from `choices`.
+
+    Raises:
+        ValueError: If no choices are provided or a choice cannot be tokenized.
+        RuntimeError: If decoding reaches an impossible prefix.
     """
 
     if not choices:
         raise ValueError("No choices available")
 
     prompt_ids = model.encode(prompt)[0].tolist()
-
+    
     encoded_choices: list[tuple[str, list[int]]] = []
 
     for choice in choices:
@@ -88,6 +107,15 @@ def build_function_selection_prompt(
     prompt: str,
     functions: list[FunctionDefinition],
 ) -> str:
+    """Build the prompt used to select a function name.
+
+    Args:
+        prompt: Natural-language user request.
+        functions: Available function definitions.
+
+    Returns:
+        A text prompt that lists the available functions and asks for one name.
+    """
     lines = [
         "You are a function-calling assistant.",
         "Select exactly one function for the user request.",
@@ -112,10 +140,23 @@ def build_function_selection_prompt(
 
 
 def choose_function_name(
-    model,
+    model: ChoiceModel,
     prompt: str,
     functions: list[FunctionDefinition],
 ) -> str:
+    """Select the best function name for a user prompt.
+
+    Args:
+        model: LLM wrapper used to score valid function names.
+        prompt: Natural-language user request.
+        functions: Available function definitions.
+
+    Returns:
+        The selected function name.
+
+    Raises:
+        ValueError: If there are no available functions.
+    """
     if not functions:
         raise ValueError("No functions available")
 

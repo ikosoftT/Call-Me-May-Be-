@@ -6,7 +6,7 @@ import sys
 from llm_sdk.llm_sdk import Small_LLM_Model
 
 from .decoder import choose_function_name
-from .models import FunctionCallResult
+from .models import FunctionCallResult, FunctionDefinition
 from .parameter_decoder import extract_parameters
 from .parser import (
     ParserError,
@@ -29,6 +29,11 @@ DEFAULT_OUTPUT_PATH = (
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
+    """Build the command-line argument parser.
+
+    Returns:
+        Configured `argparse.ArgumentParser` with input/output path options.
+    """
     parser = argparse.ArgumentParser(
         description="Call Me Maybe function-calling tool"
     )
@@ -51,7 +56,35 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def find_function_definition(
+    function_name: str,
+    functions: list[FunctionDefinition],
+) -> FunctionDefinition:
+    """Find a function definition by name.
+
+    Args:
+        function_name: Name selected by the decoder.
+        functions: Available function definitions.
+
+    Returns:
+        The matching function definition.
+
+    Raises:
+        ValueError: If no function has the requested name.
+    """
+    for function in functions:
+        if function.name == function_name:
+            return function
+
+    raise ValueError(f"selected function {function_name!r} is not defined")
+
+
 def main() -> int:
+    """Run the complete function-calling pipeline.
+
+    Returns:
+        Process exit code. `0` means success, `1` means a handled error.
+    """
     args = build_arg_parser().parse_args()
 
     try:
@@ -66,7 +99,14 @@ def main() -> int:
         )
         return 1
 
-    model = Small_LLM_Model()
+    try:
+        model = Small_LLM_Model()
+    except Exception as exc:
+        print(
+            f"Error: failed to load the LLM model: {exc}",
+            file=sys.stderr,
+        )
+        return 1
 
     results: list[FunctionCallResult] = []
 
@@ -77,11 +117,9 @@ def main() -> int:
                 item.prompt,
                 project_input.functions,
             )
-
-            selected_function = next(
-                function
-                for function in project_input.functions
-                if function.name == function_name
+            selected_function = find_function_definition(
+                function_name,
+                project_input.functions,
             )
 
             parameters = extract_parameters(
@@ -109,6 +147,12 @@ def main() -> int:
                 file=sys.stderr,
             )
 
+            return 1
+        except Exception as exc:
+            print(
+                f"Unexpected error while processing {item.prompt!r}: {exc}",
+                file=sys.stderr,
+            )
             return 1
 
     try:

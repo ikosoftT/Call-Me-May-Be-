@@ -9,10 +9,23 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator  # type: ignore
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
-JsonType = Literal["string", "number", "boolean",
-                   "integer", "object", "array", "null"]
+JsonType = Literal[
+    "string",
+    "number",
+    "boolean",
+    "integer",
+    "object",
+    "array",
+    "null",
+]
 
 
 class TypeDefinition(BaseModel):
@@ -24,7 +37,14 @@ class TypeDefinition(BaseModel):
 
 
 class FunctionDefinition(BaseModel):
-    """Represents one callable function exposed to the LLM."""
+    """Represents one callable function exposed to the LLM.
+
+    Attributes:
+        name: Function name to write in the output file.
+        description: Natural-language explanation used during selection.
+        parameters: Mapping of argument names to JSON type definitions.
+        returns: JSON type returned by the function.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -36,7 +56,17 @@ class FunctionDefinition(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        """Ensure function names are not blank after trimming."""
+        """Ensure function names are not blank after trimming.
+
+        Args:
+            value: Raw function name from JSON.
+
+        Returns:
+            The stripped function name.
+
+        Raises:
+            ValueError: If the stripped function name is empty.
+        """
         stripped = value.strip()
         if not stripped:
             raise ValueError("function name cannot be empty")
@@ -44,8 +74,21 @@ class FunctionDefinition(BaseModel):
 
     @field_validator("parameters")
     @classmethod
-    def validate_parameters(cls, value: dict[str, TypeDefinition]) -> dict[str, TypeDefinition]:
-        """Ensure parameter names are valid and unique after trimming."""
+    def validate_parameters(
+        cls,
+        value: dict[str, TypeDefinition],
+    ) -> dict[str, TypeDefinition]:
+        """Ensure parameter names are valid and unique after trimming.
+
+        Args:
+            value: Raw parameter mapping from JSON.
+
+        Returns:
+            Parameter mapping with stripped names.
+
+        Raises:
+            ValueError: If a name is empty or duplicated after trimming.
+        """
         clean: dict[str, TypeDefinition] = {}
         for key, definition in value.items():
             stripped = key.strip()
@@ -59,7 +102,11 @@ class FunctionDefinition(BaseModel):
 
 
 class PromptInput(BaseModel):
-    """Represents one natural-language prompt from the input test file."""
+    """Represents one natural-language prompt from the input test file.
+
+    Attributes:
+        prompt: User request that should be converted to a function call.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -67,7 +114,13 @@ class PromptInput(BaseModel):
 
 
 class FunctionCallResult(BaseModel):
-    """Final output object required by the subject."""
+    """Final output object required by the subject.
+
+    Attributes:
+        prompt: Original prompt copied from the input file.
+        name: Selected function name.
+        parameters: Extracted arguments for the function.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -77,19 +130,29 @@ class FunctionCallResult(BaseModel):
 
 
 class ProjectInput(BaseModel):
-    """Validated in-memory representation of all project inputs."""
+    """Validated in-memory representation of all project inputs.
+
+    Attributes:
+        functions: Available function definitions.
+        prompts: Prompt test cases to process.
+    """
 
     functions: list[FunctionDefinition]
     prompts: list[PromptInput]
 
     @model_validator(mode="after")
     def validate_unique_function_names(self) -> "ProjectInput":
-        """Reject duplicated function names because decoding needs a clear enum."""
+        """Reject duplicated function names.
+
+        Returns:
+            The current validated object.
+
+        Raises:
+            ValueError: If two function definitions use the same name.
+        """
         names = [function.name for function in self.functions]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(
                 f"duplicate function names: {', '.join(duplicates)}")
         return self
-
-

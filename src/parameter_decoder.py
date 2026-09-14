@@ -3,18 +3,32 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .decoder import constrained_choice
+from .decoder import ChoiceModel, constrained_choice
 from .models import FunctionDefinition, TypeDefinition
 
 
 def unique(values: list[str]) -> list[str]:
-    """Remove duplicates while preserving order."""
+    """Remove duplicates while preserving order.
+
+    Args:
+        values: String values that may contain duplicates.
+
+    Returns:
+        The same values without duplicates, keeping the first occurrence.
+    """
 
     return list(dict.fromkeys(values))
 
 
 def semantic_request_text(text: str) -> str:
-    """Keep the user request and drop obvious injected output instructions."""
+    """Keep the semantic request and drop obvious injected output instructions.
+
+    Args:
+        text: Full user prompt.
+
+    Returns:
+        Prompt text before common prompt-injection markers.
+    """
 
     injection_markers = [
         "ignore previous instructions",
@@ -33,7 +47,15 @@ def semantic_request_text(text: str) -> str:
 
 
 def extract_numbers(text: str) -> list[str]:
-    """Find numeric values explicitly present in the user request."""
+    """Find finite numeric values explicitly present in the user request.
+
+    Args:
+        text: Full user prompt.
+
+    Returns:
+        Numeric strings in prompt order. Integers, decimals, and scientific
+        notation are supported.
+    """
 
     finite_number_text = semantic_request_text(text)
 
@@ -46,7 +68,14 @@ def extract_numbers(text: str) -> list[str]:
 
 
 def decode_user_escapes(value: str) -> str:
-    """Decode common escaped text a user may write inside quotes."""
+    """Decode common escaped text a user may write inside quotes.
+
+    Args:
+        value: A string that may contain escapes such as `\\u0044`.
+
+    Returns:
+        The decoded string when possible, otherwise the original value.
+    """
 
     try:
         decoded = value.encode("utf-8").decode("unicode_escape")
@@ -56,7 +85,15 @@ def decode_user_escapes(value: str) -> str:
 
 
 def extract_quoted_strings(text: str) -> list[str]:
-    """Extract quoted strings while respecting escaped quote characters."""
+    """Extract quoted strings while respecting escaped quote characters.
+
+    Args:
+        text: Full user prompt.
+
+    Returns:
+        Values found between single or double quotes. The surrounding quotes are
+        not included.
+    """
 
     values: list[str] = []
     index = 0
@@ -95,7 +132,15 @@ def extract_quoted_strings(text: str) -> list[str]:
 
 
 def extract_phrase_value(text: str, phrases: list[str]) -> str | None:
-    """Return the quoted value after the last matching phrase."""
+    """Return the quoted value after the last matching phrase.
+
+    Args:
+        text: Full user prompt.
+        phrases: Phrases that should appear immediately before a quoted value.
+
+    Returns:
+        The quoted value after the latest matching phrase, or `None`.
+    """
 
     matches: list[tuple[int, str]] = []
 
@@ -134,7 +179,14 @@ def extract_phrase_value(text: str, phrases: list[str]) -> str | None:
 
 
 def extract_words(text: str) -> list[str]:
-    """Extract normal words that may represent string arguments."""
+    """Extract normal words that may represent string arguments.
+
+    Args:
+        text: Full user prompt.
+
+    Returns:
+        Unique word-like strings in prompt order.
+    """
 
     return unique(
         re.findall(
@@ -148,13 +200,19 @@ def build_string_candidates(
     user_prompt: str,
     param_name: str,
 ) -> list[str]:
-    """
-    Build constrained candidate values for string parameters.
+    """Build constrained candidate values for string parameters.
 
     The candidate set depends on the parameter role:
     - source_string: text that should be transformed
     - regex: pattern describing what to match
     - replacement: replacement text/symbol
+
+    Args:
+        user_prompt: Natural-language prompt.
+        param_name: Name of the function parameter being decoded.
+
+    Returns:
+        Candidate strings the model is allowed to choose from.
     """
 
     quoted = extract_quoted_strings(user_prompt)
@@ -295,6 +353,7 @@ def build_string_candidates(
 
     return unique(candidates)
 
+
 def build_parameter_prompt(
     user_prompt: str,
     function: FunctionDefinition,
@@ -302,7 +361,18 @@ def build_parameter_prompt(
     param_def: TypeDefinition,
     already_extracted: dict[str, Any],
 ) -> str:
-    """Build semantic context for one parameter decision."""
+    """Build semantic context for one parameter decision.
+
+    Args:
+        user_prompt: Natural-language prompt.
+        function: Selected function definition.
+        param_name: Name of the parameter currently being extracted.
+        param_def: Type definition for the current parameter.
+        already_extracted: Parameters decoded before this one.
+
+    Returns:
+        Prompt text that asks the model to choose one parameter value.
+    """
 
     lines = [
         "You are extracting one argument for a function call.",
@@ -345,12 +415,26 @@ def build_parameter_prompt(
 
 
 def decode_number(
-    model,
+    model: ChoiceModel,
     prompt: str,
     user_prompt: str,
     already_extracted: dict[str, Any],
 ) -> float:
-    """Constrain a number parameter to numbers present in the request."""
+    """Decode a `number` parameter as a float.
+
+    Args:
+        model: LLM wrapper used to score numeric candidates.
+        prompt: Parameter-selection prompt.
+        user_prompt: Original natural-language prompt.
+        already_extracted: Previous parameter values, used to avoid selecting
+            the same number twice when several numbers exist.
+
+    Returns:
+        Selected numeric value as a float.
+
+    Raises:
+        RuntimeError: If no finite number can be found in the prompt.
+    """
 
     candidates = extract_numbers(user_prompt)
 
@@ -385,12 +469,25 @@ def decode_number(
 
 
 def decode_string(
-    model,
+    model: ChoiceModel,
     prompt: str,
     user_prompt: str,
     param_name: str,
 ) -> str:
-    """Constrain a string parameter to semantically valid candidates."""
+    """Decode a `string` parameter from constrained candidates.
+
+    Args:
+        model: LLM wrapper used to score string candidates.
+        prompt: Parameter-selection prompt.
+        user_prompt: Original natural-language prompt.
+        param_name: Name of the string parameter.
+
+    Returns:
+        Selected string value.
+
+    Raises:
+        RuntimeError: If no string candidate can be built.
+    """
 
     candidates = build_string_candidates(
         user_prompt,
@@ -410,13 +507,31 @@ def decode_string(
 
 
 def decode_parameter(
-    model,
+    model: ChoiceModel,
     user_prompt: str,
     function: FunctionDefinition,
     param_name: str,
     param_def: TypeDefinition,
     already_extracted: dict[str, Any],
 ) -> Any:
+    """Decode one function parameter according to its declared JSON type.
+
+    Args:
+        model: LLM wrapper used by constrained decoding.
+        user_prompt: Original natural-language prompt.
+        function: Selected function definition.
+        param_name: Name of the parameter currently being decoded.
+        param_def: Type definition for the parameter.
+        already_extracted: Parameter values decoded before this one.
+
+    Returns:
+        The decoded parameter value with the expected Python type.
+
+    Raises:
+        NotImplementedError: If the parameter type is not supported.
+        RuntimeError: If no valid candidate can be decoded.
+        ValueError: If constrained decoding receives invalid choices.
+    """
     prompt = build_parameter_prompt(
         user_prompt,
         function,
@@ -469,11 +584,20 @@ def decode_parameter(
 
 
 def extract_parameters(
-    model,
+    model: ChoiceModel,
     user_prompt: str,
     function: FunctionDefinition,
 ) -> dict[str, Any]:
-    """Decode every required argument of the selected function."""
+    """Decode every required argument of the selected function.
+
+    Args:
+        model: LLM wrapper used by constrained decoding.
+        user_prompt: Original natural-language prompt.
+        function: Selected function definition.
+
+    Returns:
+        Dictionary mapping parameter names to decoded values.
+    """
 
     result: dict[str, Any] = {}
 

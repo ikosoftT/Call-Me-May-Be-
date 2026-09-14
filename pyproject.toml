@@ -4,6 +4,8 @@ version = "3.0.0"
 description = "Simple implementation for Call Me Maybe"
 requires-python = ">=3.10"
 dependencies = [
+    "flake8>=7.0.0",
+    "mypy>=1.8.0",
     "pydantic>=2.0",
     "torch>=2.14.0",
     "transformers>=5.17.0",
@@ -11,3 +13,16 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[tool.mypy]
+exclude = [
+    "^\\.venv/",
+    "^llm_sdk/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "llm_sdk",
+    "llm_sdk.*",
+]
+ignore_errors = true
